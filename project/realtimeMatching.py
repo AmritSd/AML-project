@@ -9,11 +9,17 @@ import collections
 import threading
 import time
 import numpy as np
+import copy
 
 # Load checkpoint
 from tensorflow.keras.models import load_model
 #Import the Model from keras
 from tensorflow.keras.models import Model
+import librosa
+import matplotlib.pyplot as plt
+# funcanimation
+from matplotlib.animation import FuncAnimation
+import matplotlib.animation as animation
 
 # Audio recording parameters ----------------------------------------------------#
 # set the chunk size of 1024 samples
@@ -47,7 +53,9 @@ matchQueueLock = threading.Lock()
 # To notify the matching thread
 matchWorkQueueSem = threading.Semaphore(0)
 
-
+# Match found semaphore used by matching thread to notify plotting thread
+matchFoundSemLock = threading.Lock()
+matchFound = 0
 class RecordAudio(threading.Thread):
     def __init__(self, threadID, name, counter,  buffer, chunk, sample_rate):
         threading.Thread.__init__(self)
@@ -117,7 +125,7 @@ class CheckForKnock(threading.Thread):
                 continue
 
             bufferLock.acquire()
-            self.bufferCopy = self.buffer.copy()
+            self.bufferCopy = [copy.copy(x) for x in self.buffer]
             fm = frameCntr
             bufferLock.release()
 
@@ -125,7 +133,7 @@ class CheckForKnock(threading.Thread):
             self.avgs.append(np.mean(np.frombuffer(last, dtype=np.int16)))
             
             avg = np.mean(self.avgs)
-            avg = avg if avg > 200 else 200
+            avg = avg if avg > 500 else 500
 
             for val in np.frombuffer(last, dtype=np.int16):
                 if val > avg * 5:
@@ -136,8 +144,8 @@ class CheckForKnock(threading.Thread):
             if(fm in self.callMatchList):
                 matchQueueLock.acquire()
                 # Get last n elements from bufferCopy
-                l = [self.bufferCopy[i] for i in range(len(self.bufferCopy) - 162, len(self.bufferCopy))]
-                # print("Here fm = {} and len(l) = {}".format(fm, len(l)))
+                l = [copy.copy(self.bufferCopy[i]) for i in range(len(self.bufferCopy) - 162, len(self.bufferCopy))]
+
                 matchWorkQueue.append(l)
                 matchQueueLock.release()
                 matchWorkQueueSem.release()
@@ -174,18 +182,25 @@ class MatchKnock(threading.Thread):
         self.encoder = Model(inputs=self.autoencoder.input, outputs=self.autoencoder.get_layer('dense_3').output)
         self.classificationModel = load_model("modelCheckpoints/classificationModel.h5")
 
-        self.passwordFile = "data/compressedSignalsAdjusted/aejvqoknnp.npy"
+        self.passwordFile = "data/compressedSignalsAdjusted/cgxwaehnir.npy"
         self.password = np.load(self.passwordFile)
 
+        self.featureExtrationModelFile = "modelCheckpoints/featureExtractionModel.h5"
+        self.featureExtractionModel = load_model(self.featureExtrationModelFile)
+
+        self.passwordFileForFeatureExtraction = "data/features/cgxwaehnir.npy"
+        self.passwordForFeatureExtraction = np.load(self.passwordFileForFeatureExtraction)
+        self.passwordForFeatureExtraction = np.pad(self.passwordForFeatureExtraction, (0, 15 - len(self.passwordForFeatureExtraction)), 'constant')
+    
+
     def run(self):
+        global matchFound
         print("Starting " + self.name)
         while(True):
             matchWorkQueueSem.acquire()
             matchQueueLock.acquire()
             self.bufferCopy = matchWorkQueue.popleft()
             matchQueueLock.release()
-
-            # print("Matching knock")
 
             # Flatten the bufferCopy
             flattenedBuffer = np.array([np.frombuffer(x, dtype=np.int16) for x in self.bufferCopy])
@@ -194,16 +209,29 @@ class MatchKnock(threading.Thread):
 
             # Compress
             compressed = self.compress_signal(flattenedBuffer)
-
             # predict X
             X = np.array([np.concatenate((self.password, compressed), axis=0)])
-
-
             # Predict
             y = self.classificationModel.predict(X, verbose=0)
 
-            if(y[0] > 0.8):
-                print("THERE WAS A MATCH WITH A SCORE OF {}\n\n".format(y[0]))
+
+            # if(y[0] > 0.8):
+            #     print("THERE WAS A MATCH WITH A SCORE OF {}\n\n".format(y[0]))
+
+
+            featureBuffer = flattenedBuffer.astype(np.float32)
+            normalizedBuffer = featureBuffer / np.max(np.abs(featureBuffer))
+            features = self.get_features(normalizedBuffer)
+            XForFeatureExtraction = np.array([np.concatenate((self.passwordForFeatureExtraction, features), axis=0)])
+            y2 = self.featureExtractionModel.predict(XForFeatureExtraction, verbose=0)
+
+            if(y2[0] > 0.8):
+                print("THERE WAS A MATCH IN FEATURE MODEL WITH A SCORE OF {}\n\n".format(y2[0]))
+                # set matchfoundsem to 3
+                matchFoundSemLock.acquire()
+                if(matchFound == 0):
+                    matchFound = 20
+                matchFoundSemLock.release()
 
 
 
@@ -235,32 +263,121 @@ class MatchKnock(threading.Thread):
         return np.concatenate(encoded, axis=0)
 
     
+    def get_features(self, x):
+        poly_features=librosa.feature.poly_features(y = x) #order 1 by default
+        features = poly_features[1]
+        # if val inn norm is > 2, set to 1, else  0
+        # Everything over 2000 hertz gets set to 1
+        features_array = features > 2
+        features_array = features_array.astype(int)
+
+        # find changes from 0 to 1
+        features_array = np.diff(features_array)
+        # find indices where changes occur
+        features_array = np.where(features_array == 1)[0]
+
+        difference_array = np.diff(features_array)
+        
+        # Pad to length of 15
+        try:
+            difference_array = np.pad(difference_array, (0, 15 - len(difference_array)), 'constant')
+        except:
+            difference_array = [0] * 15
+
+        return difference_array
 
     def stop(self):
         print("Stopping " + self.name)
         self._stop_event.set()
 
+
+
+class Plotter(threading.Thread):
+    def __init__(self, threadID, name, counter, buffer):
+        threading.Thread.__init__(self)
+        self._stop_event = threading.Event()
+        self.bufferCopy = None
+        self.threadID = threadID
+        self.name = name
+        self.counter = counter
+        self.buffer = buffer
+    def animate(self, i):
+        global matchFound
+        # Get the data from the buffer
+        # Plot the data
+        # Return the line
+        bufferLock.acquire()
+        self.bufferCopy = [copy.copy(i) for i in self.buffer]
+        bufferLock.release()
+
+        # Flatten the bufferCopy
+        flattenedBuffer = np.array([np.frombuffer(x, dtype=np.int16) for x in self.bufferCopy])
+        flattenedBuffer = flattenedBuffer.flatten()
+
+        self.line.set_data(np.arange(len(flattenedBuffer)), flattenedBuffer)
+
+
+        matchFoundSemLock.acquire()
+        mf = matchFound
+        if(matchFound > 0):
+            matchFound -= 1
+        matchFoundSemLock.release()
+
+        if(mf > 0):
+            self.line.set_color('green')
+            self.line.set_linewidth(5)
+        else:
+            self.line.set_color('red')
+            self.line.set_linewidth(2)
+
+        return self.line,
+
+    def initPlot(self):
+        self.line, = self.ax1.plot([], [], lw=2, c='red')
+        return self.line,
+
+    def run(self):
+        print("Starting " + self.name)
+        # Make funanimation
+        fig = plt.figure()
+        self.ax1 = plt.axes(xlim=(0, 180 * 1024), ylim=(-32768, 32768))
+        self.ani = animation.FuncAnimation(fig, self.animate, init_func=self.initPlot, interval=50, blit=True)
+        plt.show()
+
+    def stop(self):
+        print("Stopping " + self.name)
+        self._stop_event.set()
+        self.ani.event_source.stop()
+
+
 # Create new threads
 thread1 = RecordAudio(1, "Audio recording", 1, buffer, chunk, sample_rate)
 thread2 = CheckForKnock(2, "Knock detection", 2, buffer)
 thread3 = MatchKnock(3, "ML Thread", 3, buffer)
-
+thread4 = Plotter(4, "Plotter", 4, buffer)
 # Start new Threads
 # Pass in the buffer to the thread
 thread1.start()
 thread2.start()
 thread3.start()
+thread4.start()
 
-useInp = input("Press enter to stop")
-if(useInp == ""):
-    thread1.stop()
-    thread2.stop()
-    thread3.stop()
 
-    # Wait for threads to finish
-    thread1.join()
-    thread2.join()
-    thread3.join()
+
+while(thread4.is_alive()):
+    time.sleep(1)
+
+
+thread1.stop()
+thread2.stop()
+thread3.stop()
+
+
+# Wait for threads to finish
+thread1.join()
+thread2.join()
+thread3.join()
+thread4.join()
 
 print("Exiting Main Thread")
 
