@@ -69,8 +69,8 @@ def random_string():
     return result_str
 
 # make a dataframe of filenames and their labels
-dfFilename = "data/knockdata.pkl"
-dfFilenameCSV = "data/knockdata.csv"
+dfFilename = "data/knockdata_tony.pkl"
+dfFilenameCSV = "data/knockdata_tony.csv"
 df = None
 if(os.path.isfile(dfFilename)):
     df = pd.read_pickle(dfFilename)
@@ -78,7 +78,7 @@ else:
     df = pd.DataFrame(columns=["filename", "label"])
 
 
-folder = "data/audio"
+folder = "data/Audio_Tony"
 
 while True:
     # tag should be a random string of 10 characters
