@@ -136,7 +136,7 @@ class CheckForKnock(threading.Thread):
             avg = avg if avg > 500 else 500
 
             for val in np.frombuffer(last, dtype=np.int16):
-                if val > avg * 5:
+                if val > avg * 3:
                     # print("Knock detected, current frame : {} and match set at {}".format(fm, fm + 160))
                     self.callMatchList.append(fm + 160)
                     break
@@ -174,24 +174,34 @@ class MatchKnock(threading.Thread):
         self.bufferCopy = None
         self._stop_event = threading.Event()
 
-        self.compressionModelFileName = "modelCheckpoints/Weights-smallmodel2-315--0.00202.hdf5"
-        self.classificationModelFileName = "modelCheckpoints/classificationModel.h5"
+        # self.compressionModelFileName = "modelCheckpoints/Weights-smallmodel2-315--0.00202.hdf5"
+        # self.classificationModelFileName = "modelCheckpoints/classificationModel.h5"
 
-        # Load the models using tensorflow
-        self.autoencoder = load_model("modelCheckpoints/Weights-smallmodel2-315--0.00202.hdf5")
-        self.encoder = Model(inputs=self.autoencoder.input, outputs=self.autoencoder.get_layer('dense_3').output)
-        self.classificationModel = load_model("modelCheckpoints/classificationModel.h5")
+        # # Load the models using tensorflow
+        # self.autoencoder = load_model("modelCheckpoints/Weights-smallmodel2-315--0.00202.hdf5")
+        # self.encoder = Model(inputs=self.autoencoder.input, outputs=self.autoencoder.get_layer('dense_3').output)
+        # self.classificationModel = load_model("modelCheckpoints/classificationModel.h5")
 
-        self.passwordFile = "data/compressedSignalsAdjusted/cgxwaehnir.npy"
-        self.password = np.load(self.passwordFile)
+        # self.passwordFile = "data/compressedSignalsAdjusted/cgxwaehnir.npy"
+        # self.password = np.load(self.passwordFile)
 
-        self.featureExtrationModelFile = "modelCheckpoints/featureExtractionModel.h5"
+        self.featureExtrationModelFile = "modelCheckpoints/featureExtractionModel_2.h5"
         self.featureExtractionModel = load_model(self.featureExtrationModelFile)
 
-        self.passwordFileForFeatureExtraction = "data/features/cgxwaehnir.npy"
-        self.passwordForFeatureExtraction = np.load(self.passwordFileForFeatureExtraction)
-        self.passwordForFeatureExtraction = np.pad(self.passwordForFeatureExtraction, (0, 15 - len(self.passwordForFeatureExtraction)), 'constant')
-    
+        # self.passwordFileForFeatureExtraction = 'data/features/qdcdgqjjdr.npy'
+        self.passwordFiles = [
+            'data/features/qdcdgqjjdr.npy',
+            'data/features/auekkfhgvs.npy',
+            'data/features/haflvkblwb.npy'
+        ]
+
+
+        self.passwords = [np.load(x) for x in self.passwordFiles]
+
+        # self.passwordForFeatureExtraction = np.load(self.passwordFileForFeatureExtraction)
+        # self.passwordForFeatureExtraction = np.pad(self.passwordForFeatureExtraction, (0, 25 - len(self.passwordForFeatureExtraction)), 'constant')
+
+        self.passwords = [np.pad(x, (0, 25 - len(x)), 'constant') for x in self.passwords]
 
     def run(self):
         global matchFound
@@ -208,11 +218,11 @@ class MatchKnock(threading.Thread):
             flattenedBuffer = flattenedBuffer[: 20000 * 8]
 
             # Compress
-            compressed = self.compress_signal(flattenedBuffer)
-            # predict X
-            X = np.array([np.concatenate((self.password, compressed), axis=0)])
-            # Predict
-            y = self.classificationModel.predict(X, verbose=0)
+            # compressed = self.compress_signal(flattenedBuffer)
+            # # predict X
+            # X = np.array([np.concatenate((self.password, compressed), axis=0)])
+            # # Predict
+            # y = self.classificationModel.predict(X, verbose=0)
 
 
             # if(y[0] > 0.8):
@@ -220,18 +230,43 @@ class MatchKnock(threading.Thread):
 
 
             featureBuffer = flattenedBuffer.astype(np.float32)
-            normalizedBuffer = featureBuffer / np.max(np.abs(featureBuffer))
+            # write fearure buffer to file
+            self.save_audio(featureBuffer, "data/temp.wav")
+            normalizedBuffer = librosa.load("data/temp.wav", sr=20000)[0]
+            # normalizedBuffer = featureBuffer / np.max(np.abs(featureBuffer))
             features = self.get_features(normalizedBuffer)
-            XForFeatureExtraction = np.array([np.concatenate((self.passwordForFeatureExtraction, features), axis=0)])
+    
+            # XForFeatureExtraction = np.array([np.concatenate((self.passwordForFeatureExtraction, features), axis=0)])
+
+            XForFeatureExtraction = []
+            for password in self.passwords:
+                XForFeatureExtraction.append(np.concatenate((password, features), axis=0))
+
+
+            XForFeatureExtraction = np.array(XForFeatureExtraction)
+
             y2 = self.featureExtractionModel.predict(XForFeatureExtraction, verbose=0)
 
-            if(y2[0] > 0.8):
-                print("THERE WAS A MATCH IN FEATURE MODEL WITH A SCORE OF {}\n\n".format(y2[0]))
-                # set matchfoundsem to 3
+            print("Passwords are : {}".format(self.passwords))
+            print("Features are : {}".format(features))
+            print(y2)
+
+            if(np.max(y2) > 0.8):
+                print("THERE WAS A MATCH WITH A SCORE OF {}\n\n".format(np.max(y2)))
+                print(y2)
+                                # set matchfoundsem to 3
                 matchFoundSemLock.acquire()
                 if(matchFound == 0):
                     matchFound = 20
                 matchFoundSemLock.release()
+
+            # if(y2[0] > 0.8):
+            #     print("THERE WAS A MATCH IN FEATURE MODEL WITH A SCORE OF {}\n\n".format(y2[0]))
+            #     # set matchfoundsem to 3
+            #     matchFoundSemLock.acquire()
+            #     if(matchFound == 0):
+            #         matchFound = 20
+            #     matchFoundSemLock.release()
 
 
 
@@ -280,9 +315,9 @@ class MatchKnock(threading.Thread):
         
         # Pad to length of 15
         try:
-            difference_array = np.pad(difference_array, (0, 15 - len(difference_array)), 'constant')
+            difference_array = np.pad(difference_array, (0, 25 - len(difference_array)), 'constant')
         except:
-            difference_array = [0] * 15
+            difference_array = [0] * 25
 
         return difference_array
 
@@ -290,6 +325,17 @@ class MatchKnock(threading.Thread):
         print("Stopping " + self.name)
         self._stop_event.set()
 
+    def save_audio(self, signal, filename, denormalize=False):
+        if denormalize:
+            signal = signal * 30000
+        
+        signal = np.array(signal, dtype=np.int16)
+        wavefile = wave.open(filename, "w")
+        wavefile.setnchannels(1)
+        wavefile.setsampwidth(2)
+        wavefile.setframerate(20000)
+        wavefile.writeframes(signal)
+        wavefile.close()
 
 
 class Plotter(threading.Thread):
