@@ -111,12 +111,12 @@ class CheckForKnock(threading.Thread):
         self.threadID = threadID
         self.name = name
         self.counter = counter
-        self.avgs = collections.deque(maxlen=10)
+        self.avgs = collections.deque(maxlen=180)
         self.buffer = buffer
         self.bufferCopy = None
         self._stop_event = threading.Event()
         
-        self.callMatchList = collections.deque(maxlen=10)
+        self.callMatchList = collections.deque(maxlen=1000)
 
     def run(self):
         print("Starting " + self.name)
@@ -136,11 +136,11 @@ class CheckForKnock(threading.Thread):
             avg = avg if avg > 500 else 500
 
             for val in np.frombuffer(last, dtype=np.int16):
-                if val > avg * 3:
+                if val > avg * 5:
                     # print("Knock detected, current frame : {} and match set at {}".format(fm, fm + 160))
                     self.callMatchList.append(fm + 160)
                     break
-            
+                    
             if(fm in self.callMatchList):
                 matchQueueLock.acquire()
                 # Get last n elements from bufferCopy
@@ -209,9 +209,13 @@ class MatchKnock(threading.Thread):
         while(True):
             matchWorkQueueSem.acquire()
             matchQueueLock.acquire()
+            if(len(matchWorkQueue) < 1):
+                matchQueueLock.release()
+                continue
             self.bufferCopy = matchWorkQueue.popleft()
             matchQueueLock.release()
 
+            # print("Matching a knock")
             # Flatten the bufferCopy
             flattenedBuffer = np.array([np.frombuffer(x, dtype=np.int16) for x in self.bufferCopy])
             flattenedBuffer = flattenedBuffer.flatten()
@@ -247,11 +251,11 @@ class MatchKnock(threading.Thread):
 
             y2 = self.featureExtractionModel.predict(XForFeatureExtraction, verbose=0)
 
-            print("Passwords are : {}".format(self.passwords))
-            print("Features are : {}".format(features))
-            print(y2)
+            # print("Passwords are : {}".format(self.passwords))
+            # print("Features are : {}".format(features))
+            # print(y2)
 
-            if(np.max(y2) > 0.8):
+            if(np.min(y2) > 0.8):
                 print("THERE WAS A MATCH WITH A SCORE OF {}\n\n".format(np.max(y2)))
                 print(y2)
                                 # set matchfoundsem to 3
@@ -260,13 +264,13 @@ class MatchKnock(threading.Thread):
                     matchFound = 20
                 matchFoundSemLock.release()
 
-            # if(y2[0] > 0.8):
-            #     print("THERE WAS A MATCH IN FEATURE MODEL WITH A SCORE OF {}\n\n".format(y2[0]))
-            #     # set matchfoundsem to 3
-            #     matchFoundSemLock.acquire()
-            #     if(matchFound == 0):
-            #         matchFound = 20
-            #     matchFoundSemLock.release()
+            # # if(y2[0] > 0.8):
+            # #     print("THERE WAS A MATCH IN FEATURE MODEL WITH A SCORE OF {}\n\n".format(y2[0]))
+            # #     # set matchfoundsem to 3
+            # #     matchFoundSemLock.acquire()
+            # #     if(matchFound == 0):
+            # #         matchFound = 20
+            # #     matchFoundSemLock.release()
 
 
 
