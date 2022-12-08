@@ -3,3 +3,6 @@ project/modelCheckpoints/*
 !project/modelCheckpoints/classificationModel.h5
 !project/modelCheckpoints/Weights-smallmodel2-315--0.00202.hdf5
 !project/modelCheckpoints/featureExtractionModel.h5
+!project/modelCheckpoints/knock_slices_history.csv
+!project/modelCheckpoints/knock_slices_model.h5
+!project/modelCheckpoints/knock_slices_validation.csv
